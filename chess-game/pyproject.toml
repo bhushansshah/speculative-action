@@ -35,3 +35,7 @@ include = ["textarena*", "speculative_workflow*", "regular_workflow*"]
 
 [tool.setuptools]
 py-modules = ["utils"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

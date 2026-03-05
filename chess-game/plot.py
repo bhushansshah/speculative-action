@@ -14,6 +14,7 @@ import sys
 import yaml
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Dict, List, Tuple
 from scipy import stats
 
 
@@ -68,9 +69,9 @@ def create_time_token_plot(base_path: str, with_confidence: bool = False) -> Non
                 if target_step == 10:
                     continue
                 token_wasted = -tokens_saved
-                key = target_step
-                if key not in confidence_data:
-                    confidence_data[key] = (time_saved, token_wasted, num_pred, target_step)
+                key_step = target_step
+                if key_step not in confidence_data:
+                    confidence_data[key_step] = (time_saved, token_wasted, num_pred, target_step)
         for (time_saved, token_wasted, num_pred, target_step) in confidence_data.values():
             key = (num_pred, target_step)
             if key not in data:
@@ -96,7 +97,7 @@ def create_time_token_plot(base_path: str, with_confidence: bool = False) -> Non
         ax.grid(True, alpha=0.5, linestyle="-", linewidth=0.8)
         ax.set_facecolor("white")
 
-        step_groups = {}
+        step_groups: Dict[int, List[Tuple[int, float, float]]] = {}
         for i, (x, y, num_pred, target) in enumerate(zip(time_spent_list, token_wasted_list, number_predictions, target_steps_list)):
             if num_pred <= 3:
                 if target not in step_groups:
@@ -117,7 +118,7 @@ def create_time_token_plot(base_path: str, with_confidence: bool = False) -> Non
                 marker=markers.get(target, "o"), edgecolors="white", linewidths=1.2,
             )
 
-        speculation_groups = {}
+        speculation_groups: Dict[int, Dict[str, List[float]]] = {}
         for x, y, num_pred in zip(time_spent_list, token_wasted_list, number_predictions):
             if num_pred not in speculation_groups:
                 speculation_groups[num_pred] = {"x": [], "y": []}

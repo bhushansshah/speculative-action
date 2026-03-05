@@ -1,28 +1,17 @@
 import os
 import sys
-
-# Ensure chess-game root is on path so "import textarena" in Speculative_Chess resolves
-_chess_game_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _chess_game_root not in sys.path:
-    sys.path.insert(0, _chess_game_root)
-
-from openai import OpenAI
+from openai import OpenAI 
 import json
 from Speculative_Chess import ChessActionCleaner
 from typing import Optional, Tuple, List
 import time
-import yaml
+import yaml 
 import argparse
 
 
 def load_config(config_path: Optional[str] = None) -> dict:
     """Load configuration from YAML file. Uses chess-game/config.yml when run from speculative_workflow/."""
-    if config_path is None:
-        path = os.path.join(_chess_game_root, "config.yml")
-        if not os.path.isfile(path):
-            path = "config.yml"
-    else:
-        path = config_path
+    path = config_path if config_path is not None else "config.yml"
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
@@ -241,7 +230,7 @@ def process_trajectory_with_guesses(
         print("--------------------------------")
 
     output_dir = os.path.dirname(steps_info_path)
-    safe_model_name = guess_model_name.replace('-', '_').replace('/', '_')
+    safe_model_name = config["guess"]["model_name"].replace('-', '_').replace('/', '_')
     output_filename = f"steps_info_{safe_model_name}_guess_{num_guesses}.json"
     output_path = os.path.join(output_dir, output_filename)
     

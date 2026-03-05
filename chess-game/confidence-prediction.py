@@ -114,7 +114,7 @@ def guess_action_confidence_score(
     retries: int = 3,
     guesses: Optional[List[str]] = None,
     ground_truth_move: Optional[str] = None,
-) -> Tuple[List[float], float]:
+) -> Tuple[Optional[List[float]], Optional[float]]:
     """
     Generate confidence scores for given guesses. Reads model/provider from config.
     """
@@ -146,6 +146,9 @@ def guess_action_confidence_score(
     end_pred_time = time.perf_counter()
     prediction_time = end_pred_time - start_pred_time
 
+    if raw_output is None or input_tokens is None or output_tokens is None or total_tokens is None:
+        return None, None
+
     return extract_confidence_score(raw_output), prediction_time
 
 
@@ -157,9 +160,7 @@ def process_trajectory_with_guesses(
     """
     Process a guess info file with confidence predictions. Reads game/guess settings from config.
     """
-    num_guesses = config["game"]["num_guesses"]
     guess_model_name = config["guess"]["model_name"]
-    guess_provider = config["guess"]["provider"]
     new_step_info: dict = {}
 
     # Load the guess_info file
@@ -190,7 +191,6 @@ def process_trajectory_with_guesses(
         ground_truth_move = guess_info[step]["current_move"]
         guessed_moves = guess_info[step]["guessed_moves"]
 
-        #TODO: hack
         if "confidence_scores" in new_step_info[step]:
             confidence_scores = new_step_info[step]["confidence_scores"]
             prediction_times = new_step_info[step]["prediction_times"]
@@ -232,9 +232,6 @@ def process_trajectory_with_guesses(
 def main():
     """
     Main function to process a guess info file with confidence predictions.
-
-    Usage:
-        python confidence-prediction.py [--config CONFIG] [--input PATH]
     """
     import argparse
     p = argparse.ArgumentParser(description="Add confidence scores to a steps_info*_guess_*.json file.")

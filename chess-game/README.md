@@ -110,10 +110,10 @@ Output goes under `./trajectories/` (or `Spec_Chess_Trajs/` depending on config)
 Then format the trajectory for analysis:
 
 ```bash
-uv run python speculative_workflow/guess_over_spec_traj.py
+uv run speculative_workflow/guess_over_spec_traj.py --base-dir "path/to/model_vs_model_runs"
 ```
 
-This writes `steps_info_{model_name}_guess_{num_guesses}.json` in the same run directory.
+Here, `"path/to/model_vs_model_runs"` should be a directory containing subfolders—one for each model-vs-model run. This script will create a `steps_info_{model_name}_guess_{num_guesses}.json` file inside each run's subfolder.
 
 **Note:** In the speculative pipeline there is no speculative window after a prediction hit. Use `-add_spec=True` with `guess_over_spec_traj.py` to add speculative predictions for those windows too (for accuracy estimation).
 

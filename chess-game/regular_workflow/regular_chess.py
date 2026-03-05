@@ -1,20 +1,18 @@
 """
-Chess Speculative Game Runner
+Chess Regular Game Runner
 
-A chess game runner that implements speculative execution
-where a guess model predicts opponent moves and prepare responses in parallel.
+A chess game runner that implements regular execution
+where the agent makes a move and the opponent makes a move sequentially.
 """
 
 import re
 import time
 import uuid
-import logging
 from concurrent.futures import ThreadPoolExecutor
 from os.path import join
 from typing import Dict, List, Optional, Tuple, Any
 
 import chess
-import openai
 from openai import OpenAI
 
 import textarena as ta
@@ -68,27 +66,6 @@ class Config:
 
         except Exception as e:
             print(f"Error loading YAML config: {e}")
-
-class PromptTemplates:
-
-    STANDARD_GAME_PROMPT = (
-        "You are a competitive game player. Make sure you read the game instructions, carefully, and always follow the required format. Reason deeply, and then return your move. YOu want to optimize your move to win the game. Important: always return a valid move and a valid move only, even if you are uncertain. "
-    )
-    
-    GUESS_PROMPT = (
-        "Reason very very succinctly about the next move, return {num_guesses} candidates for the next move. IMPORTANT FORMAT: "
-        "Your response must be a comma-separated list of moves in [UCI_MOVE] format, like: [e2e4], [e2e3], [d2d4] "
-        "(exact syntax with square brackets and commas between moves!). For example: [e2e4], [d2d4], [g1f3]. "
-        "Ensure all moves are from the list of valid moves. Even if uncertain, return exactly {num_guesses} candidates. "
-        "Reason very very quickly, no need to truly think about each of the candidates, just return the most likely candidates and return precisely {num_guesses} valid moves - no more, no less."
-    )
-    
-    RETRY_PROMPT = (
-        "\nAttempt {attempt} failed, please remember that you are acting as {role} in "
-        "the chess game, and you need to make a valid move from the last valid moves list. "
-        "Return the move in the format [UCI_MOVE], for example [e2e4]."
-    )
-
 
 class ChessActionCleaner:
     """Utility class for cleaning and validating chess actions"""
@@ -168,7 +145,7 @@ class AgentManager:
             if agent_name == "OpenRouter":
                 agents[i] = ta.agents.OpenRouterAgent(
                     model_name=self.config.openrouter_model_name,
-                    system_prompt=PromptTemplates.STANDARD_GAME_PROMPT,
+                    system_prompt=self.config.standard_game_prompt,
                     api_key=self.config.openrouter_api_key,
                     base_url="https://openrouter.ai/api/v1",
                     verbose=False
@@ -176,7 +153,7 @@ class AgentManager:
             elif agent_name == "OpenAI":
                 agents[i] = ta.agents.OpenAIAgent(
                     model_name=self.config.openai_model_name,
-                    system_prompt=PromptTemplates.STANDARD_GAME_PROMPT,
+                    system_prompt=self.config.standard_game_prompt,
                     api_key=self.config.openai_api_key,
                     base_url="https://api.openai.com/v1",
                     verbose=False
@@ -193,7 +170,7 @@ class AgentManager:
                     response = self.openai_client.chat.completions.create(
                         model=model_name,
                         messages=[
-                            {"role": "system", "content": PromptTemplates.STANDARD_GAME_PROMPT},
+                            {"role": "system", "content": self.config.standard_game_prompt},
                             {"role": "user", "content": prompt}
                         ],
                         reasoning_effort="low",
@@ -210,7 +187,7 @@ class AgentManager:
                     response = self.openrouter_client.chat.completions.create(
                         model=model_name,
                         messages=[
-                            {"role": "system", "content": PromptTemplates.STANDARD_GAME_PROMPT},
+                            {"role": "system", "content": self.config.standard_game_prompt},
                             {"role": "user", "content": prompt}
                         ],
                         reasoning_effort="low"
@@ -227,7 +204,7 @@ class AgentManager:
                 if attempt == retries - 1:
                     return None, None, None, None
         
-        return None
+        return None, None, None, None
 
 
 class RegularChessRunner:
@@ -240,24 +217,19 @@ class RegularChessRunner:
     """
     
     def __init__(
-        self,
-        agent0_name: str = "OpenRouter",
-        agent1_name: str = "OpenAI",
-        guess_model_name: str = "gpt-5-2025-08-07",
-        num_guesses: int = 1,
-        config: Config = None,
+        self, config: Config
     ):
         """Initialize the chess runner with configuration"""
         self.config = config
         self.agent_manager = AgentManager(self.config)
         
-        self.agent0_name = agent0_name
-        self.agent1_name = agent1_name
-        self.guess_model_name = guess_model_name
-        self.num_guesses = num_guesses
+        self.agent0_name = self.config.agent_name0
+        self.agent1_name = self.config.agent_name1
+        self.guess_model_name = self.config.guess_model_name
+        self.num_guesses = self.config.num_guesses
 
         self.current_run_id: Optional[str] = None
-        self.base_traj_path = f"{self.config.trajectories_path}/{agent0_name}_vs_{agent1_name}"
+        self.base_traj_path = f"{self.config.trajectories_path}/{self.agent0_name}_vs_{self.agent1_name}"
         self.logger: Optional[GameLogger] = None
         
         # Initialize environment
@@ -274,7 +246,7 @@ class RegularChessRunner:
     
     def _guess_action(self, observation: str, retries: int = 3) -> Tuple[Optional[str], float, Optional[int], Optional[int], Optional[int]]:
         start_pred_time = time.perf_counter()
-        prompt = observation + PromptTemplates.GUESS_PROMPT.format(num_guesses=1)
+        prompt = observation + self.config.guess_prompt.format(num_guesses=1)
         raw_output, input_tokens, output_tokens, total_tokens = self.agent_manager.call_guess_llm(prompt, self.guess_model_name, retries)
         end_pred_time = time.perf_counter()
         prediction_time = end_pred_time - start_pred_time
@@ -286,7 +258,7 @@ class RegularChessRunner:
 
     def _guess_actions(self, observation: str, retries: int = 3) -> Tuple[Optional[List[str]], float, Optional[int], Optional[int], Optional[int]]:
         start_pred_time = time.perf_counter()
-        prompt = observation + PromptTemplates.GUESS_PROMPT.format(num_guesses=self.num_guesses)
+        prompt = observation + self.config.guess_prompt.format(num_guesses=self.num_guesses)
         raw_output, input_tokens, output_tokens, total_tokens = self.agent_manager.call_guess_llm(prompt, self.guess_model_name, retries)
         end_pred_time = time.perf_counter()
         prediction_time = end_pred_time - start_pred_time
@@ -316,7 +288,7 @@ class RegularChessRunner:
             if self.logger:
                 self.logger.log("RETRY", f"Attempt {attempt + 1} failed for {role} because {raw_action}")
             
-            observation += PromptTemplates.RETRY_PROMPT.format(
+            observation += self.config.retry_prompt.format(
                 attempt=attempt + 1, 
                 role=role
             )
@@ -334,23 +306,11 @@ class RegularChessRunner:
         move, input_tokens, output_tokens, total_tokens = self._agent_call_with_retry(agent, truncated_observation, player_id, valid_moves)
         end_time = time.perf_counter()
 
-        # print(f"Current agent full observation: {observation}")
-        # print(f"Current agent truncated observation: {truncated_observation}")
-        # print(f"Current agent move: {move}")
-        
         return move, end_time - start_time, input_tokens, output_tokens, total_tokens
     
-    def _speculation_task(self, agent: Any, observation: str, player_id: int) -> Tuple[List[Optional[str]], List[Optional[str]], List[Optional[float]], List[Optional[float]], List[Optional[float]], List[Optional[int]], List[Optional[int]], List[Optional[int]], List[Optional[int]], List[Optional[int]], List[Optional[int]]]:
+    def _speculation_task(self, agent: Any, observation: str, player_id: int) -> Tuple[List[str], List[str], List[float], List[float], List[float], List[int], List[int], List[int], List[int], List[int], List[int]]:
         """Execute speculation: predict opponent move and prepare response"""
-        start_time = time.perf_counter()
 
-        # # Generate multiple predictions in parallel
-        # with ThreadPoolExecutor(max_workers=self.num_guesses) as executor:
-        #     prediction_futures = [
-        #         executor.submit(self._guess_action, observation, retries=3)
-        #         for _ in range(self.num_guesses)
-        #     ]
-        #     prediction_results = [future.result() for future in prediction_futures]
         role = "White" if player_id == 0 else "Black"
         valid_moves = self._get_valid_moves()
 
@@ -358,42 +318,21 @@ class RegularChessRunner:
 
         prediction_results = self._guess_actions(truncated_observation, retries=3)
 
-        # print(f"prediction agent full observation: {observation}")
-        # print(f"prediction agent truncated observation: {truncated_observation}")
-        # print(f"Prediction results: {prediction_results}")
-
-        # Unpack predictions and prediction times
-        # predictions : List[Optional[str]] = []
-        # individual_prediction_times : List[Optional[float]] = []
-        # for result in prediction_results:
-        #     if result is not None and len(result) == 2:
-        #         predictions.append(result[0])
-        #         individual_prediction_times.append(result[1])
-        #     else:
-        #         predictions.append(None)
-        #         individual_prediction_times.append(None)
+        if prediction_results is None or prediction_results[0] is None:
+            return [], [], [], [], [], [], [], [], [], [], []
 
         predictions = prediction_results[0]
-        individual_prediction_times = [prediction_results[1]] * len(predictions) if predictions is not None else [None]
-        input_prediction_tokens = [prediction_results[2]] * len(predictions) if predictions is not None else [None]
-        output_prediction_tokens = [prediction_results[3]] * len(predictions) if predictions is not None else [None]
-        total_prediction_tokens = [prediction_results[4]] * len(predictions) if predictions is not None else [None]
+        individual_prediction_times = [prediction_results[1]] * len(predictions)
+        input_prediction_tokens = [prediction_results[2] or 0] * len(predictions)
+        output_prediction_tokens = [prediction_results[3] or 0] * len(predictions)
+        total_prediction_tokens = [prediction_results[4] or 0] * len(predictions)
 
         # Remove None predictions and get unique predictions
-        valid_predictions = [p for p in predictions if p is not None] if predictions is not None else []
-        valid_prediction_times = [individual_prediction_times[i] for i in range(len(individual_prediction_times)) if predictions is not None and predictions[i] is not None]
+        valid_predictions = [p for p in predictions]
+        valid_prediction_times = [individual_prediction_times[i] for i in range(len(individual_prediction_times))]
 
         if not valid_predictions:
-            return [], [], valid_prediction_times, [0] * len(valid_prediction_times), valid_prediction_times, [], [], [], [], [], []
-
-        print(f"Predictions: {predictions}")
-        print(f"Individual prediction times: {individual_prediction_times}")
-        print(f"Input prediction tokens: {input_prediction_tokens}")
-        print(f"Output prediction tokens: {output_prediction_tokens}")
-        print(f"Total prediction tokens: {total_prediction_tokens}")
-
-        print(f"Valid predictions: {valid_predictions}")
-        print(f"Valid prediction times: {valid_prediction_times}")
+            return [], [], [], [], [], [], [], [], [], [], []
 
         # Simulate the predicted moves in parallel
         with ThreadPoolExecutor(max_workers=len(valid_predictions)) as executor:
@@ -405,37 +344,26 @@ class RegularChessRunner:
 
         print(f"Speculations: {speculations_results}")
         
-        speculations: List[Optional[str]] = []
-        individual_speculation_times: List[Optional[float]] = []
-        input_speculation_tokens: List[Optional[int]] = []
-        output_speculation_tokens: List[Optional[int]] = []
-        total_speculation_tokens: List[Optional[int]] = []
+        speculations: List[str] = []
+        individual_speculation_times: List[float] = []
+        input_speculation_tokens: List[int] = []
+        output_speculation_tokens: List[int] = []
+        total_speculation_tokens: List[int] = []
 
         for speculation in speculations_results:
-            if speculation is not None and len(speculation) == 5:
+            if speculation is not None and speculation[0] is not None:
                 speculations.append(speculation[0])
                 individual_speculation_times.append(speculation[1])
                 input_speculation_tokens.append(speculation[2])
                 output_speculation_tokens.append(speculation[3])
                 total_speculation_tokens.append(speculation[4])
-            else:
-                speculations.append(None)
-                individual_speculation_times.append(None)
-                input_speculation_tokens.append(None)
-                output_speculation_tokens.append(None)
-                total_speculation_tokens.append(None)
         
-
-        total_times: List[Optional[float]] = []
+        total_times: List[float] = []
         for i in range(len(valid_prediction_times)):
-            pred_time = individual_prediction_times[i]
-            spec_time = individual_speculation_times[i]
-            if pred_time is None or spec_time is None:
-                total_times.append(None)
-            else:
-                total_times.append(pred_time + spec_time)
+            total_times.append(valid_prediction_times[i] + individual_speculation_times[i])
+
         return valid_predictions, speculations, valid_prediction_times, individual_speculation_times, total_times, input_prediction_tokens, output_prediction_tokens, total_prediction_tokens, input_speculation_tokens, output_speculation_tokens, total_speculation_tokens
-    
+
     def _simulate_and_speculate(
         self, 
         agent: Any, 
@@ -446,9 +374,6 @@ class RegularChessRunner:
         """Simulate predicted move and generate speculative response"""
 
         start_time_speculate = time.perf_counter()
-
-        # Create game state message
-        move_message = f"\n[GAME] Player {player_id} made the following move: {predicted_move}"
         
         # Execute predicted move on board
         move_uci = predicted_move.lower().replace("[", "").replace("]", "")
@@ -462,11 +387,6 @@ class RegularChessRunner:
         valid_moves = [f'[{move.uci()}]' for move in board_copy.legal_moves]
         valid_moves_in_string = ", ".join(valid_moves)
         
-        # new_observation = (
-        #     observation + move_message + 
-        #     f"\n[GAME] Current board: \n{board_str}" +
-        #     f"\nValid moves: {valid_moves_in_string}\n"
-        # )
         spec_role = "White" if player_id == 1 else "Black"
         new_observation = f"[GAME] You are playing as {spec_role} in a game of Chess. Make your moves in UCI format enclosed in square brackets (e.g., [e2e4]).\n[GAME] The current board is:\n{board_str}\n[GAME] The valid moves are: {valid_moves_in_string}."
 
@@ -483,7 +403,7 @@ class RegularChessRunner:
         self,
         agents: Dict[int, Any],
         stop_after: Optional[int] = None
-    ) -> Tuple[Dict[int, Any], Any, Any, float, float]:
+    ) -> Tuple[Dict[int, Any], Any, Any, float]:
         """Main game execution loop"""
         self.env.reset(num_players=self.config.num_chess_players)
         
@@ -586,17 +506,7 @@ def main():
     if args.trajectories_dir is not None:
         config.trajectories_path = args.trajectories_dir.rstrip("/")
 
-    agent_name0 = config.agent_name0
-    agent_name1 = config.agent_name1
-    guess_model_name = config.guess_model_name
-    num_guesses = config.num_guesses
-    runner = RegularChessRunner(
-        agent0_name=agent_name0,
-        agent1_name=agent_name1,
-        guess_model_name=guess_model_name,
-        num_guesses=num_guesses,
-        config=config,
-    )
+    runner = RegularChessRunner(config=config)
     stop_after = args.stop_after if args.stop_after is not None else config.stop_after
     start_time = time.time()
     runner.run(stop_after=stop_after)

@@ -5,19 +5,14 @@ A chess game runner that implements speculative execution
 where a guess model predicts opponent moves and prepare responses in parallel.
 """
 
-import os
-import sys
 import re
 import time
 import uuid
-import logging
-from concurrent.futures import ThreadPoolExecutor, Future
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from os.path import join
 from typing import Dict, List, Optional, Tuple, Any
 
 import chess
-import openai
 from openai import OpenAI
 
 import textarena as ta
@@ -71,22 +66,6 @@ class Config:
 
         except Exception as e:
             print(f"Error loading YAML config: {e}")
-
-# @dataclass
-# class TokenUsage:
-#     input_tokens: Optional[int] = None
-#     output_tokens: Optional[int] = None
-#     total_tokens: Optional[int] = None   
-
-# @dataclass
-# class SpeculationResult:
-#     predictions: List[Optional[str]] = []
-#     speculations: List[Optional[str]] = []
-#     prediction_times: List[Optional[float]] = []
-#     speculation_times: List[Optional[float]] = []
-#     total_times: List[Optional[float]] = []
-#     prediction_tokens: List[TokenUsage] = []
-#     speculation_tokens: List[TokenUsage] = []
 
 class ChessActionCleaner:
     """Utility class for cleaning and validating chess actions"""
@@ -253,10 +232,12 @@ class SpeculativeChessRunner:
         return [f'[{move.uci()}]' for move in self.env.state.game_state["board"].legal_moves]
     
 
-    def _guess_actions(self, observation: str, retries: int = 3) -> Tuple[Optional[List[str]], float, Optional[int], Optional[int], Optional[int]]:
+    def _guess_actions(self, observation: str, retries: int = 3) -> Optional[Tuple[List[str], float, int, int, int]]:
         start_pred_time = time.perf_counter()
         prompt = observation + self.config.guess_prompt.format(num_guesses=self.num_guesses)
         raw_output, input_tokens, output_tokens, total_tokens = self.agent_manager.call_guess_llm(prompt, self.guess_model_name, retries)
+        if raw_output is None or input_tokens is None or output_tokens is None or total_tokens is None:
+            return None
         end_pred_time = time.perf_counter()
         prediction_time = end_pred_time - start_pred_time
         
@@ -306,10 +287,9 @@ class SpeculativeChessRunner:
         
         return move, end_time - start_time, input_tokens, output_tokens, total_tokens
     
-    def _speculation_task(self, agent: Any, observation: str, player_id: int) -> Tuple[List[Optional[str]], List[Optional[str]], List[Optional[float]], List[Optional[float]], List[Optional[float]], List[Optional[int]], List[Optional[int]], List[Optional[int]], List[Optional[int]], List[Optional[int]], List[Optional[int]]]:
+    def _speculation_task(self, agent: Any, observation: str, player_id: int) -> Tuple[List[str], List[str], List[float], List[float], List[float], List[int], List[int], List[int], List[int], List[int], List[int]]:
         """Execute speculation: predict opponent move and prepare response.
         The predictions are the speculated opponent moves, the speculations are the current agent's moves based on the predictions."""
-        start_time = time.perf_counter()
 
         role = "White" if player_id == 0 else "Black"
         valid_moves = self._get_valid_moves()
@@ -318,24 +298,21 @@ class SpeculativeChessRunner:
 
         prediction_results = self._guess_actions(truncated_observation, retries=3)
 
+        if prediction_results is None:
+            return [], [], [], [], [], [], [], [], [], [], []
+
         predictions = prediction_results[0]
-        individual_prediction_times = [prediction_results[1]] * len(predictions) if predictions is not None else [None]
-        input_prediction_tokens = [prediction_results[2]] * len(predictions) if predictions is not None else [None]
-        output_prediction_tokens = [prediction_results[3]] * len(predictions) if predictions is not None else [None]
-        total_prediction_tokens = [prediction_results[4]] * len(predictions) if predictions is not None else [None]
+        individual_prediction_times = [prediction_results[1]] * len(predictions)
+        input_prediction_tokens = [prediction_results[2]] * len(predictions)
+        output_prediction_tokens = [prediction_results[3]] * len(predictions)
+        total_prediction_tokens = [prediction_results[4]] * len(predictions)
 
         # Remove None predictions and get unique predictions
-        valid_predictions = [p for p in predictions if p is not None] if predictions is not None else []
-        valid_prediction_times = [individual_prediction_times[i] for i in range(len(individual_prediction_times)) if predictions is not None and predictions[i] is not None]
+        valid_predictions = [p for p in predictions]
+        valid_prediction_times = [individual_prediction_times[i] for i in range(len(individual_prediction_times))]
 
         if not valid_predictions:
-            return [], [], valid_prediction_times, [0] * len(valid_prediction_times), valid_prediction_times, [], [], [], [], [], []
-
-        print(f"Predictions: {predictions}")
-        print(f"Individual prediction times: {individual_prediction_times}")
-        print(f"Input prediction tokens: {input_prediction_tokens}")
-        print(f"Output prediction tokens: {output_prediction_tokens}")
-        print(f"Total prediction tokens: {total_prediction_tokens}")
+            return [], [], [], [], [], [], [], [], [], [], []
 
         # Simulate the predicted moves in parallel
         with ThreadPoolExecutor(max_workers=len(valid_predictions)) as executor:
@@ -347,48 +324,26 @@ class SpeculativeChessRunner:
 
         print(f"Speculations: {speculations_results}")
         
-        speculations: List[Optional[str]] = []
-        individual_speculation_times: List[Optional[float]] = []
-        input_speculation_tokens: List[Optional[int]] = []
-        output_speculation_tokens: List[Optional[int]] = []
-        total_speculation_tokens: List[Optional[int]] = []
+        speculations: List[str] = []
+        individual_speculation_times: List[float] = []
+        input_speculation_tokens: List[int] = []
+        output_speculation_tokens: List[int] = []
+        total_speculation_tokens: List[int] = []
 
         for speculation in speculations_results:
-            if speculation is not None and len(speculation) == 5:
+            if speculation is not None and speculation[0] is not None:
                 speculations.append(speculation[0])
                 individual_speculation_times.append(speculation[1])
                 input_speculation_tokens.append(speculation[2])
                 output_speculation_tokens.append(speculation[3])
                 total_speculation_tokens.append(speculation[4])
-            else:
-                speculations.append(None)
-                individual_speculation_times.append(None)
-                input_speculation_tokens.append(None)
-                output_speculation_tokens.append(None)
-                total_speculation_tokens.append(None)
-        
 
-        total_times: List[Optional[float]] = []
+        total_times: List[float] = []
         for i in range(len(valid_prediction_times)):
             pred_time = individual_prediction_times[i]
             spec_time = individual_speculation_times[i]
-            if pred_time is None or spec_time is None:
-                total_times.append(None)
-            else:
+            if pred_time is not None and spec_time is not None:
                 total_times.append(pred_time + spec_time)
-
-
-        # speculation_result = SpeculationResult(
-        #     predictions=valid_predictions,
-        #     speculations=speculations,
-        #     prediction_times=valid_prediction_times,
-        #     speculation_times=individual_speculation_times,
-        #     total_times=total_times,
-        #     prediction_tokens=[TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens) for input_tokens, output_tokens, total_tokens in zip(input_prediction_tokens, output_prediction_tokens, total_prediction_tokens)],
-        #     speculation_tokens=[TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens) for input_tokens, output_tokens, total_tokens in zip(input_speculation_tokens, output_speculation_tokens, total_speculation_tokens)],
-        # )
-
-        # return speculation_result
 
         return valid_predictions, speculations, valid_prediction_times, individual_speculation_times, total_times, input_prediction_tokens, output_prediction_tokens, total_prediction_tokens, input_speculation_tokens, output_speculation_tokens, total_speculation_tokens
     
@@ -402,10 +357,6 @@ class SpeculativeChessRunner:
         """Simulate predicted move and generate speculative response"""
 
         start_time_speculate = time.perf_counter()
-
-        # Create game state message
-        move_message = f"\n[GAME] Player {player_id} made the following move: {predicted_move}"
-        
         # Execute predicted move on board
         move_uci = predicted_move.lower().replace("[", "").replace("]", "")
         predicted_chess_move = chess.Move.from_uci(move_uci)
@@ -436,7 +387,7 @@ class SpeculativeChessRunner:
         """Main game execution loop"""
         self.env.reset(num_players=self.config.num_chess_players)
         
-        steps_info = {}
+        steps_info: Dict[int, Dict[str, Any]] = {}
         step_count = 0
         done = False
         is_initial_step = True
@@ -470,21 +421,21 @@ class SpeculativeChessRunner:
                         break
 
             if speculation_hit:
-                current_predictions : List[Optional[str]] = []
-                current_speculations : List[Optional[str]] = []     
-                time_taken1 = 0
-                times_taken2 = []
-                prediction_times = []
-                speculation_times = []
-                input_prediction_tokens = []
-                output_prediction_tokens = []
-                total_prediction_tokens = []
-                input_speculation_tokens = []
-                output_speculation_tokens = []
-                total_speculation_tokens = []
-                input_tokens1 = []
-                output_tokens1 = []
-                total_tokens1 = []
+                current_predictions : List[str] = []
+                current_speculations : List[str] = []     
+                time_taken1: float = 0
+                times_taken2: List[float] = []
+                prediction_times: List[float] = []
+                speculation_times: List[float] = []
+                input_prediction_tokens: List[int] = []
+                output_prediction_tokens: List[int] = []
+                total_prediction_tokens: List[int] = []
+                input_speculation_tokens: List[int] = []
+                output_speculation_tokens: List[int] = []
+                total_speculation_tokens: List[int] = []
+                input_tokens1: int = 0
+                output_tokens1: int = 0
+                total_tokens1: int = 0
                 regular_time += temp_time_holder
             else:
                 # Run parallel execution
@@ -497,9 +448,8 @@ class SpeculativeChessRunner:
                     )
                     
                     current_move, time_taken1, input_tokens1, output_tokens1, total_tokens1 = current_future.result()
-                    #TODO: REVISIT THIS
+
                     current_predictions, current_speculations, prediction_times, speculation_times, times_taken2, input_prediction_tokens, output_prediction_tokens, total_prediction_tokens, input_speculation_tokens, output_speculation_tokens, total_speculation_tokens = speculation_future.result()
-                    # speculation_result = speculation_future.result()
                     
                     if is_initial_step:
                         is_initial_step = False
