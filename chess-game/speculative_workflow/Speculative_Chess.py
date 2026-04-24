@@ -51,6 +51,9 @@ class Config:
             self.agent_name0 = config['game']['agent_name0']
             self.agent_name1 = config['game']['agent_name1']
             self.num_guesses = config['game']['num_guesses']
+            # Depth-algorithm knob; optional for breadth-only callers.
+            self.max_inflight_actors = config['game'].get(
+                'max_inflight_actors', 13)
 
             # Guess Model Configuration
             self.guess_model_name = config['guess']['model_name']
@@ -153,7 +156,24 @@ class AgentManager:
     def call_guess_llm(self, prompt: str, model_name: str, retries: int = 3) -> Tuple[Optional[str], Optional[int], Optional[int], Optional[int]]:
         for attempt in range(retries):
             try:
-                if model_name.startswith("gpt") or model_name.startswith("o"):
+                if "/" in model_name:  # OpenRouter model
+                    response = self.openrouter_client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": self.config.standard_game_prompt},
+                            {"role": "user", "content": prompt}
+                        ],
+                        reasoning_effort="low"
+                    )
+                    input_tokens, output_tokens, total_tokens = None, None, None
+                    usage = response.usage
+                    if usage:
+                        input_tokens = usage.prompt_tokens
+                        output_tokens = usage.completion_tokens
+                        total_tokens = usage.total_tokens
+                    return response.choices[0].message.content.strip(), input_tokens, output_tokens, total_tokens
+
+                elif model_name.startswith("gpt") or model_name.startswith("o"):
                     response = self.openai_client.chat.completions.create(
                         model=model_name,
                         messages=[
@@ -170,24 +190,7 @@ class AgentManager:
                         output_tokens = usage.completion_tokens
                         total_tokens = usage.total_tokens
                     return response.choices[0].message.content.strip(), input_tokens, output_tokens, total_tokens
-                
-                elif "/" in model_name:  # OpenRouter model
-                    response = self.openrouter_client.chat.completions.create(
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": self.config.standard_game_prompt},
-                            {"role": "user", "content": prompt}
-                        ],
-                        reasoning_effort="low"
-                    )
-                    input_tokens, output_tokens, total_tokens = None, None, None
-                    usage = response.usage
-                    if usage:
-                        input_tokens = usage.prompt_tokens
-                        output_tokens = usage.completion_tokens
-                        total_tokens = usage.total_tokens
-                    return response.choices[0].message.content.strip(), input_tokens, output_tokens, total_tokens
-                
+
             except Exception as e:
                 print(f"LLM call attempt {attempt + 1} failed: {e}")
                 if attempt == retries - 1:
